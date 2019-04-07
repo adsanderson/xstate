@@ -14,12 +14,12 @@ import {
   isBuiltInEvent,
   partition,
   updateHistoryValue,
-  updateContext
+  updateContext,
+  warn
 } from './utils';
 import {
   Event,
   StateValue,
-  Action,
   TransitionConfig,
   ActivityMap,
   StateTransition,
@@ -38,7 +38,6 @@ import {
   ActivityDefinition,
   StateTypes,
   StateNodeConfig,
-  Activity,
   StateSchema,
   TransitionsDefinition,
   StatesDefinition,
@@ -158,11 +157,11 @@ class StateNode<
   /**
    * The action(s) to be executed upon entering the state node.
    */
-  public onEntry: Array<ActionObject<TContext, TEvent>>;
+  public onEntry: Array<ActionObject<TContext, TEvent>>; // TODO: deprecate (entry)
   /**
    * The action(s) to be executed upon exiting the state node.
    */
-  public onExit: Array<ActionObject<TContext, TEvent>>;
+  public onExit: Array<ActionObject<TContext, TEvent>>; // TODO: deprecate (exit)
   /**
    * The activities to be started upon entering the state node,
    * and stopped upon exiting the state node.
@@ -248,16 +247,15 @@ class StateNode<
         : _config.history
         ? 'history'
         : 'atomic');
-    if (!IS_PRODUCTION && 'parallel' in _config) {
-      // tslint:disable-next-line:no-console
-      console.warn(
-        `The "parallel" property is deprecated and will be removed in version 4.1. ${
-          _config.parallel
-            ? `Replace with \`type: 'parallel'\``
-            : `Use \`type: '${this.type}'\``
-        } in the config for state node '${this.id}' instead.`
-      );
-    }
+
+    warn(
+      !('parallel' in _config),
+      `The "parallel" property is deprecated and will be removed in version 4.1. ${
+        _config.parallel
+          ? `Replace with \`type: 'parallel'\``
+          : `Use \`type: '${this.type}'\``
+      } in the config for state node '${this.id}' instead.`
+    );
     this.initial = _config.initial;
     this.order = _config.order || -1;
 
@@ -286,10 +284,15 @@ class StateNode<
 
     this.transient = !!(_config.on && _config.on[NULL_EVENT]);
     this.strict = !!_config.strict;
-    this.onEntry = toArray(_config.onEntry).map(action =>
+
+    // TODO: deprecate (entry)
+    this.onEntry = toArray(_config.entry || _config.onEntry).map(action =>
       toActionObject(action)
     );
-    this.onExit = toArray(_config.onExit).map(action => toActionObject(action));
+    // TODO: deprecate (exit)
+    this.onExit = toArray(_config.exit || _config.onExit).map(action =>
+      toActionObject(action)
+    );
     this.meta = _config.meta;
     this.data =
       this.type === 'final'
@@ -331,7 +334,7 @@ class StateNode<
     });
     this.activities = toArray(_config.activities)
       .concat(this.invoke)
-      .map(activity => this.resolveActivity(activity));
+      .map(activity => toActivityDefinition(activity));
     this.after = this.getDelayedTransitions();
   }
 
@@ -1023,19 +1026,9 @@ class StateNode<
     const actions = exitActions
       .concat(transition.actions)
       .concat(entryActions)
-      .map(action => this.resolveAction(action));
+      .map(action => toActionObject(action, this.machine.options.actions));
 
     return actions;
-  }
-  private resolveAction(
-    action: Action<TContext, TEvent>
-  ): ActionObject<TContext, TEvent> {
-    return toActionObject(action, this.machine.options.actions);
-  }
-  private resolveActivity(
-    activity: Activity<TContext, TEvent>
-  ): ActivityDefinition<TContext, TEvent> {
-    return toActivityDefinition(activity);
   }
 
   /**
@@ -1127,7 +1120,10 @@ class StateNode<
     const activities = { ...currentState.activities };
     actions.forEach(action => {
       if (action.type === actionTypes.start) {
-        activities[action.activity!.type] = true;
+        activities[action.activity!.type] = action as ActivityDefinition<
+          TContext,
+          TEvent
+        >;
       } else if (action.type === actionTypes.stop) {
         activities[action.activity!.type] = false;
       }
@@ -1164,8 +1160,8 @@ class StateNode<
             !this.machine.options.delays ||
             this.machine.options.delays[sendAction.delay] === undefined
           ) {
-            // tslint:disable-next-line:no-console
-            console.warn(
+            warn(
+              false,
               `No delay reference for delay expression '${
                 sendAction.delay
               }' was found on machine '${this.machine.id}'`
@@ -1514,7 +1510,7 @@ class StateNode<
       }
       if (stateNode.activities) {
         stateNode.activities.forEach(activity => {
-          activityMap[getEventType(activity)] = true;
+          activityMap[getEventType(activity)] = activity;
           actions.push(start(activity));
         });
       }
@@ -1652,10 +1648,7 @@ class StateNode<
 
     // Case when state node is compound but no initial state is defined
     if (this.type === 'compound' && !this.initial) {
-      if (!IS_PRODUCTION) {
-        // tslint:disable-next-line:no-console
-        console.warn(`Compound state node '${this.id}' has no initial state.`);
-      }
+      warn(false, `Compound state node '${this.id}' has no initial state.`);
       return [this];
     }
 

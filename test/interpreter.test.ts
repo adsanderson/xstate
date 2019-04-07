@@ -355,7 +355,7 @@ describe('interpreter', () => {
       assert.equal(stopActivityState!, 'off', 'activity should be disposed');
     });
 
-    it('should restart activities from a compound state', () => {
+    it('should not restart activities from a compound state', () => {
       let activityActive = false;
 
       const toggleMachine = Machine(
@@ -397,8 +397,8 @@ describe('interpreter', () => {
       const bState = toggleMachine.transition(activeState, 'SWITCH');
       const service = interpret(toggleMachine).start(bState);
 
-      assert.isTrue(service.state.activities.blink);
-      assert.isTrue(activityActive);
+      assert.ok(service.state.activities.blink);
+      assert.isFalse(activityActive);
     });
   });
 
@@ -644,6 +644,134 @@ describe('interpreter', () => {
       interpret(parentMachine)
         .onDone(() => done())
         .start();
+    });
+  });
+
+  describe('send() batch events', () => {
+    const countMachine = Machine({
+      id: 'count',
+      initial: 'even',
+      context: { count: 0 },
+      states: {
+        even: {
+          onExit: [assign({ count: ctx => ctx.count + 1 }), 'evenAction'],
+          on: { INC: 'odd' }
+        },
+        odd: {
+          onExit: [assign({ count: ctx => ctx.count + 1 }), 'oddAction'],
+          on: { INC: 'even' }
+        }
+      }
+    });
+
+    it('should batch send events', done => {
+      let transitions = 0;
+      const evenCounts: number[] = [];
+      const oddCounts: number[] = [];
+      const countService = interpret(
+        countMachine.withConfig({
+          actions: {
+            evenAction: ctx => {
+              evenCounts.push(ctx.count);
+            },
+            oddAction: ctx => {
+              oddCounts.push(ctx.count);
+            }
+          }
+        })
+      )
+        .onTransition(state => {
+          transitions++;
+
+          switch (transitions) {
+            // initial state
+            case 1:
+              assert.deepEqual(state.context, { count: 0 });
+              break;
+            // transition with batched events
+            case 2:
+              assert.equal(state.value, 'even');
+              assert.deepEqual(state.context, { count: 4 });
+              assert.deepEqual(state.actions.map(a => a.type), [
+                'evenAction',
+                'oddAction',
+                'evenAction',
+                'oddAction'
+              ]);
+
+              assert.deepEqual(
+                evenCounts,
+                [1, 3],
+                'even actions should be bound to their state at time of creation'
+              );
+              assert.deepEqual(
+                oddCounts,
+                [2, 4],
+                'odd actions should be bound to their state at time of creation'
+              );
+              done();
+              break;
+          }
+        })
+        .start();
+
+      countService.send(['INC', 'INC', { type: 'INC' }, 'INC']);
+    });
+  });
+
+  describe('send()', () => {
+    const sendMachine = Machine({
+      id: 'send',
+      initial: 'inactive',
+      states: {
+        inactive: {
+          on: {
+            EVENT: {
+              target: 'active',
+              cond: (_, e) => e.id === 42
+            },
+            ACTIVATE: 'active'
+          }
+        },
+        active: {
+          type: 'final'
+        }
+      }
+    });
+
+    it('can send events with a string', done => {
+      const service = interpret(sendMachine)
+        .onDone(() => done())
+        .start();
+
+      service.send('ACTIVATE');
+    });
+
+    it('can send events with an object', done => {
+      const service = interpret(sendMachine)
+        .onDone(() => done())
+        .start();
+
+      service.send({ type: 'ACTIVATE' });
+    });
+
+    it('can send events with an object with payload', done => {
+      const service = interpret(sendMachine)
+        .onDone(() => done())
+        .start();
+
+      service.send({ type: 'EVENT', id: 42 });
+    });
+
+    it('can send events with a string and object payload', done => {
+      const service = interpret(sendMachine)
+        .onDone(() => {
+          assert.deepEqual(service.state.event, { type: 'EVENT', id: 42 });
+          done();
+        })
+        .start();
+
+      service.send('EVENT', { id: 42 });
     });
   });
 

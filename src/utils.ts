@@ -11,9 +11,12 @@ import {
   ActionTypes,
   HistoryValue,
   OmniEventObject,
-  AssignAction
+  AssignAction,
+  ActionObject
 } from './types';
 import { STATE_DELIMITER } from './constants';
+import { State } from './State';
+import { IS_PRODUCTION } from './StateNode';
 
 function isState(state: object | string): state is StateInterface {
   if (typeof state === 'string') {
@@ -410,3 +413,46 @@ export function updateContext<TContext, TEvent extends EventObject>(
 
   return updatedContext;
 }
+
+export function bindActionToState<TC, TE extends EventObject>(
+  action: ActionObject<TC, TE>,
+  state: State<TC, TE>
+): ActionObject<TC, TE> {
+  const { exec } = action;
+  const boundAction: ActionObject<TC, TE> = {
+    ...action,
+    exec:
+      exec !== undefined
+        ? () =>
+            exec(state.context, state.event as TE, {
+              action,
+              state
+            })
+        : undefined
+  };
+
+  return boundAction;
+}
+
+// tslint:disable-next-line:no-empty
+let warn: (condition: boolean | Error, message: string) => void = () => {};
+
+if (!IS_PRODUCTION) {
+  warn = (condition: boolean | Error, message: string) => {
+    const error = condition instanceof Error ? condition : undefined;
+    if (!error && condition) {
+      return;
+    }
+
+    if (console !== undefined) {
+      const args: any[] = [`Warning: ${message}`];
+      if (error) {
+        args.push(error);
+      }
+      // tslint:disable-next-line:no-console
+      console.warn.apply(console, args);
+    }
+  };
+}
+
+export { warn };

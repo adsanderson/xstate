@@ -162,14 +162,14 @@ green.actions;
 - Passing in a function that **starts** the activity (as a side-effect)
 - From that function, returning another function that **stops** the activity (also as a side-effect).
 
-For example, here's how a `'beeping'` activity that logs `'BEEP!'` to the console every `ctx.interval` would be implemented:
+For example, here's how a `'beeping'` activity that logs `'BEEP!'` to the console every `context.interval` would be implemented:
 
 ```js
-function createBeepingActivity(ctx, activity) {
+function createBeepingActivity(context, activity) {
   // Start the beeping activity
   const interval = setInterval(() => {
     console.log('BEEP!');
-  }, ctx.interval);
+  }, context.interval);
 
   // Return a function that stops the beeping activity
   return () => clearInterval(interval);
@@ -233,4 +233,28 @@ service.send('TOGGLE');
 service.send('TOGGLE');
 
 // no more beeps!
+```
+
+## Restarting Activities
+
+When [restoring a persisted state](./states.md#persisting-state), activities that were previously running are _not restarted_ by default. This is to prevent undesirable and/or unexpected behavior. However, activities can be manually started by adding `start(...)` actions to the persisted state before restarting a service:
+
+```js
+import { State, actions } from 'xstate';
+
+// ...
+
+const restoredState = State.create(somePersistedStateJSON);
+
+// Select activities to be restarted
+Object.keys(restoredState.activities).forEach(activityKey => {
+  if (restoredState.activities[activityKey]) {
+    // Filter activities, and then add the start() action to the restored state
+    restoredState.actions.push(actions.start(activityKey));
+  }
+});
+
+// This will start someService
+// with the activities restarted.
+someService.start(restoredState);
 ```

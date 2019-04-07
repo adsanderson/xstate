@@ -182,7 +182,7 @@ on: {
   LEFT_CLICK: 'word.left',
   RIGHT_CLICK: 'word.right',
   CENTER_CLICK: { target: '.center', internal: false }, // same as 'word.center'
-  JUSTIFY_CLICK: { target: 'word.justify', internal: false } // same as '.justify'
+  JUSTIFY_CLICK: { target: 'word.justify', internal: false } // same as 'word.justify'
 }
 // ...
 ```
@@ -350,7 +350,7 @@ The event-target mappings defined on the `on: { ... }` property of state nodes i
     on: {
       TIMER: {
         target: '#yellow',
-        cond: ctx => ctx.timeElapsed > 5000
+        cond: context => context.timeElapsed > 5000
       },
       POWER_OUTAGE: '#red.flashing'
     }

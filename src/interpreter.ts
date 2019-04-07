@@ -20,13 +20,14 @@ import {
   ErrorExecutionEvent,
   StateValue,
   InterpreterOptions,
-  ActivityDefinition
+  ActivityDefinition,
+  SingleOrArray
 } from './types';
 import { State } from './State';
 import * as actionTypes from './actionTypes';
-import { toEventObject, doneInvoke, error, start } from './actions';
+import { toEventObject, doneInvoke, error } from './actions';
 import { IS_PRODUCTION } from './StateNode';
-import { mapContext } from './utils';
+import { mapContext, bindActionToState, warn } from './utils';
 import { Scheduler } from './scheduler';
 
 export type StateListener<TContext, TEvent extends EventObject> = (
@@ -225,21 +226,6 @@ export class Interpreter<
       this.execute(this.state);
     }
 
-    // Restart activities
-    if (event.type === actionTypes.init) {
-      Object.keys(state.activities).forEach(activityId => {
-        if (
-          !state.activities[activityId] ||
-          this.children.has(activityId) ||
-          activityId === actionTypes.invoke // TODO: make this work for invocations
-        ) {
-          return;
-        }
-
-        this.spawnActivity(start(activityId).activity);
-      });
-    }
-
     // Dev tools
     if (this.devTools) {
       this.devTools.send(event, state);
@@ -409,16 +395,28 @@ export class Interpreter<
     return this;
   }
   /**
-   * Sends an event to the running interpreter to trigger a transition,
-   * and returns the immediate next state.
+   * Sends an event to the running interpreter to trigger a transition.
    *
-   * @param event The event to send
+   * An array of events (batched) can be sent as well, which will send all
+   * batched events to the running interpreter. The listeners will be
+   * notified only **once** when all events are processed.
+   *
+   * @param event The event(s) to send
    */
-  public send = (event: OmniEvent<TEvent>): State<TContext, TEvent> => {
-    const eventObject = toEventObject<OmniEventObject<TEvent>>(event);
+  public send = (
+    event: SingleOrArray<OmniEvent<TEvent>>,
+    payload?: Record<string, any> & { type?: never }
+  ): State<TContext, TEvent> => {
+    if (Array.isArray(event)) {
+      this.batch(event);
+      return this.state;
+    }
+
+    const eventObject = toEventObject<OmniEventObject<TEvent>>(event, payload);
     if (!this.initialized && this.options.deferEvents) {
       // tslint:disable-next-line:no-console
-      console.warn(
+      warn(
+        false,
         `Event "${eventObject.type}" was sent to uninitialized service "${
           this.machine.id
         }" and is deferred. Make sure .start() is called for this service.\nEvent: ${JSON.stringify(
@@ -449,6 +447,45 @@ export class Interpreter<
     // tslint:disable-next-line:semicolon
   };
 
+  private batch(events: Array<OmniEvent<TEvent>>): void {
+    if (!this.initialized && this.options.deferEvents) {
+      // tslint:disable-next-line:no-console
+      warn(
+        false,
+        `${events.length} event(s) were sent to uninitialized service "${
+          this.machine.id
+        }" and are deferred. Make sure .start() is called for this service.\nEvent: ${JSON.stringify(
+          event
+        )}`
+      );
+    } else if (!this.initialized) {
+      throw new Error(
+        `${events.length} event(s) were sent to uninitialized service "${
+          this.machine.id
+        }". Make sure .start() is called for this service, or set { deferEvents: true } in the service options.`
+      );
+    }
+
+    this.scheduler.schedule(() => {
+      let nextState = this.state;
+      for (const event of events) {
+        const eventObject = toEventObject<OmniEventObject<TEvent>>(event);
+        const actions = nextState.actions.map(a =>
+          bindActionToState(a, nextState)
+        );
+        nextState = this.machine.transition(nextState, eventObject);
+        nextState.actions.unshift(...actions);
+
+        this.forward(eventObject);
+      }
+
+      this.update(
+        nextState,
+        toEventObject<OmniEventObject<TEvent>>(events[events.length - 1])
+      );
+    });
+  }
+
   /**
    * Returns a send function bound to this interpreter instance.
    *
@@ -474,7 +511,8 @@ export class Interpreter<
       }
 
       // tslint:disable-next-line:no-console
-      console.warn(
+      warn(
+        false,
         `Service '${this.id}' has no parent: unable to send event ${event.type}`
       );
       return;
@@ -531,7 +569,8 @@ export class Interpreter<
         this.machine.options.delays[delay] === undefined
       ) {
         // tslint:disable-next-line:no-console
-        console.warn(
+        warn(
+          false,
           `No delay reference for delay expression '${delay}' was found on machine '${
             this.machine.id
           }' on service '${this.id}'.`
@@ -613,7 +652,8 @@ export class Interpreter<
 
           if (!serviceCreator) {
             // tslint:disable-next-line:no-console
-            console.warn(
+            warn(
+              false,
               `No service found for invocation '${activity.src}' in machine '${
                 this.machine.id
               }'.`
@@ -666,10 +706,7 @@ export class Interpreter<
         }
         break;
       default:
-        // tslint:disable-next-line:no-console
-        console.warn(
-          `No implementation found for action type '${action.type}'`
-        );
+        warn(false, `No implementation found for action type '${action.type}'`);
         break;
     }
 
@@ -753,14 +790,12 @@ export class Interpreter<
   private spawnCallback(id: string, callback: InvokeCallback): void {
     const receive = (e: TEvent) => this.send(e);
     let listener = (e: EventObject) => {
-      if (!IS_PRODUCTION) {
-        // tslint:disable-next-line:no-console
-        console.warn(
-          `Event '${
-            e.type
-          }' sent to callback service '${id}' but was not handled by a listener.`
-        );
-      }
+      warn(
+        false,
+        `Event '${
+          e.type
+        }' sent to callback service '${id}' but was not handled by a listener.`
+      );
     };
 
     let stop;
@@ -809,7 +844,7 @@ export class Interpreter<
 
     if (!implementation) {
       // tslint:disable-next-line:no-console
-      console.warn(`No implementation found for activity '${activity.type}'`);
+      warn(false, `No implementation found for activity '${activity.type}'`);
       return;
     }
 
